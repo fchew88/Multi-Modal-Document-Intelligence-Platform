@@ -1,0 +1,15 @@
+authlib
+streamlit 
+openai
+lxml 
+html5lib
+python-dotenv
+pillow
+easyocr
+opencv-python>=4.5.0
+pdfplumber
+numpy
+python-docx
+pandas
+matplotlib
+openpyxl
