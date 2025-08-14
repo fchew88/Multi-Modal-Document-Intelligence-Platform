@@ -1,16 +1,22 @@
 import streamlit as st
 from PIL import Image
-import easyocr
 from openai import OpenAI
-import numpy as np
-import tempfile
-import os
+import pytesseract
 import re
+import os
+import tempfile
 
-# Initialize EasyOCR reader once
-@st.cache_resource
-def load_reader():
-    return easyocr.Reader(['en'])
+#print(pytesseract.get_tesseract_version())
+# Should print version like '5.3.3'
+
+#print(pytesseract.pytesseract.tesseract_cmd)
+# Should show path to tesseract.exe
+
+# Configure Tesseract path for Streamlit Cloud
+if os.path.exists('/usr/bin/tesseract'):
+    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+else:
+    st.warning("Tesseract not found in default location. Some features may not work.")
 
 # Initialize OpenAI client
 try:
@@ -31,51 +37,56 @@ if 'analysis_results' not in st.session_state:
 
 def preprocess_image(image):
     """Basic image preprocessing"""
-    img = np.array(image.convert('L'))  # Convert to grayscale
-    img = (img > 128).astype(np.uint8) * 255  # Basic thresholding
-    return img
+    return image.convert('L')  # Convert to grayscale
 
 def clean_ocr_text(text):
     """Clean OCR results"""
-    text = re.sub(r'[^\w\s\-.,$€£¥%]', '', text)  # Remove special chars
-    text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
+    text = re.sub(r'[^\w\s\-.,$€£¥%]', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+def extract_text(image):
+    """Perform OCR using pytesseract"""
+    try:
+        # Custom configuration for better accuracy
+        custom_config = r'--oem 3 --psm 6'
+        text = pytesseract.image_to_string(image, config=custom_config)
+        return text if text.strip() else None
+    except Exception as e:
+        st.error(f"OCR Error: {str(e)}")
+        return None
 
 # Image upload section
 uploaded_image = st.file_uploader("Upload an image", 
                                 type=["jpg", "jpeg", "png", "bmp"])
 
 if uploaded_image is not None:
-    st.session_state.image = Image.open(uploaded_image)
-    st.image(st.session_state.image, 
-            caption='Uploaded Image', 
-            use_container_width=True)
+    try:
+        st.session_state.image = Image.open(uploaded_image)
+        st.image(st.session_state.image, 
+                caption='Uploaded Image', 
+                use_container_width=True)  # Changed from use_column_width to use_container_width
 
-    if st.button('Extract Text'):
-        with st.spinner('Processing image...'):
-            try:
-                reader = load_reader()
-                
-                # Save to temp file for processing
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
-                    st.session_state.image.save(tmp_file, format='PNG')
-                    tmp_file_path = tmp_file.name
-                
-                # Perform OCR
-                results = reader.readtext(tmp_file_path, 
-                                       detail=0,
-                                       paragraph=True,
-                                       rotation_info=[0, 90, 180, 270])
-                
-                # Clean and store results
-                cleaned_results = [clean_ocr_text(text) for text in results if text.strip()]
-                st.session_state.extracted_text = "\n\n".join(cleaned_results)
-                
-                os.unlink(tmp_file_path)
-                st.success("Text extraction complete!")
-                
-            except Exception as e:
-                st.error(f"Text extraction failed: {str(e)}")
+        if st.button('Extract Text'):
+            with st.spinner('Processing image...'):
+                try:
+                    # Preprocess image
+                    processed_img = preprocess_image(st.session_state.image)
+                    
+                    # Perform OCR
+                    raw_text = extract_text(processed_img)
+                    
+                    if not raw_text:
+                        st.warning("No text found. Try a clearer image.")
+                        st.session_state.extracted_text = ""
+                    else:
+                        st.session_state.extracted_text = clean_ocr_text(raw_text)
+                        st.success("Text extraction complete!")
+                        
+                except Exception as e:
+                    st.error(f"Text extraction failed: {str(e)}")
+    except Exception as e:
+        st.error(f"Failed to load image: {str(e)}")
 
 # Display extracted text
 if st.session_state.get('extracted_text'):
@@ -134,9 +145,9 @@ if st.session_state.get('extracted_text') and client:
                 """
                 
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-5-nano",
                     messages=[{"role": "user", "content": full_prompt}],
-                    temperature=0.3
+                    temperature=1.0,
                 )
                 
                 st.session_state.analysis_results = response.choices[0].message.content
@@ -152,7 +163,3 @@ if st.button("Clear All"):
     st.session_state.clear()
     st.success("All content cleared!")
     st.rerun()
-
-# Debug view
-#with st.expander("Debug: Session State"):
-#    st.write(st.session_state)
