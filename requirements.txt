@@ -5,8 +5,8 @@ lxml
 html5lib
 python-dotenv
 pillow
-easyocr
-opencv-python>=4.5.0
+pytesseract
+opencv-python
 pdfplumber
 numpy
 python-docx
