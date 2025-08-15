@@ -33,6 +33,18 @@ data2visual_page = st.Page(
     icon="📊",
 )
 
+future_page = st.Page(
+    page="nav/future.py",
+    title="Future Improvements",
+    icon="🔮",
+)
+
+feedback_page = st.Page(
+    page="nav/feedback.py",
+    title="Feedback",
+    icon="💬",
+)
+
 if not st.user.get('is_logged_in', False):
     st.title("Multi-Modal Document Intelligence Platform")
     st.markdown("""
@@ -48,7 +60,7 @@ else:
     
     # Navigation setup
     pg = st.navigation(
-        pages=[intro_page, image2text_page, doc2text_page, data2visual_page],
+        pages=[intro_page, image2text_page, doc2text_page, data2visual_page, future_page, feedback_page],
     )
     
     # Display user info and navigation
