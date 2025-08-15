@@ -87,16 +87,93 @@ def clean_text(text):
     return text.strip()
 
 def structure_text(text):
-    """Attempt to structure the extracted text"""
-    sections = re.split(r'\n{2,}', text)
+    """AI-powered document structure analysis with regex fallback"""
     structured = []
-    for section in sections:
-        if len(section.split()) > 5:  # Only include meaningful sections
-            structured.append({
-                'content': section,
-                'type': 'paragraph',
-                'length': len(section)
-            })
+    
+    # First try using AI for structure analysis if client is available
+    if client and len(text) > 500:  # Only use AI for substantial documents
+        try:
+            # Prepare the prompt
+            prompt = f"""
+            Analyze this document text and identify its logical structure. 
+            Return the analysis in JSON format with sections containing:
+            - "heading" (the section title if detectable)
+            - "content" (the section text)
+            - "type" (section type: title, heading, paragraph, list, etc.)
+            
+            Rules:
+            1. Preserve all original text content
+            2. Group related paragraphs under headings
+            3. Identify section types based on formatting and content
+            4. Handle numbered/bulleted lists appropriately
+            5. Return valid JSON format
+            
+            Document Text:
+            {text[:15000]}  # Limit to first 15k chars to avoid token limits
+            """
+            
+            # Get AI response
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse the AI response
+            ai_structure = json.loads(response.choices[0].message.content)
+            
+            # Convert AI structure to our format
+            for section in ai_structure.get('sections', []):
+                content = section.get('content', '').strip()
+                if content and len(content.split()) > 5:
+                    structured.append({
+                        'content': content,
+                        'type': section.get('type', 'section'),
+                        'length': len(content),
+                        'heading': section.get('heading', '')
+                    })
+            
+            if structured:
+                return structured
+                
+        except Exception as e:
+            st.warning(f"AI structure analysis failed, using fallback: {str(e)}")
+    
+    # Fallback to regex-based structuring if AI fails or isn't available
+    section_patterns = [
+        r'\n\s*\n\s*[A-Z][A-Z0-9 ]+\s*\n\s*\n',  # All-caps headings
+        r'\n\s*\d+\.\s+[A-Z][^\n]+\s*\n',         # Numbered headings (1. SECTION)
+        r'\n\s*[A-Z][^\n]+\s*\n[-=]+\s*\n',       # Underlined headings
+        r'\n\s*[A-Z][^\n]+:\s*\n',                # Headings ending with colon
+        r'\n\s*[•■♦●]\s+[A-Z][^\n]+\s*\n',        # Bullet point headings
+        r'\n\s*\n\s*[A-Z][^\n]+\s*\n\s*\n',       # Regular headings with spacing
+    ]
+    
+    for pattern in section_patterns:
+        sections = re.split(pattern, text)
+        if len(sections) > 1:
+            for section in sections:
+                if len(section.strip()) > 0 and len(section.split()) > 5:
+                    structured.append({
+                        'content': section.strip(),
+                        'type': 'section',
+                        'length': len(section.strip()),
+                        'heading': ''
+                    })
+            break
+    
+    if not structured:
+        paragraphs = re.split(r'\n\s*\n', text)
+        for para in paragraphs:
+            if len(para.strip()) > 0 and len(para.split()) > 5:
+                structured.append({
+                    'content': para.strip(),
+                    'type': 'paragraph', 
+                    'length': len(para.strip()),
+                    'heading': ''
+                })
+    
     return structured
 
 # Initialize session state
@@ -107,20 +184,43 @@ if 'structured_data' not in st.session_state:
 if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 
-# File uploader
-uploaded_file = st.file_uploader("Upload your document", 
-                               type=["pdf", "docx", "txt", "csv", "xlsx"])
+# Document selection section
+option = st.radio("Select document source:", ("Upload a document", "Use sample document"))
+
+if option == "Upload a document":
+    uploaded_file = st.file_uploader("Choose a document file", 
+                                   type=["pdf", "docx", "txt", "csv", "xlsx"])
+else:
+    # Load sample document
+    sample_path = "data/Doc/GT-FY23-FinS.pdf"
+    try:
+        if os.path.exists(sample_path):
+            with open(sample_path, "rb") as f:
+                uploaded_file = f.read()
+        else:
+            st.error(f"Sample document not found at: {sample_path}")
+            uploaded_file = None
+    except Exception as e:
+        st.error(f"Failed to load sample document: {str(e)}")
+        uploaded_file = None
 
 if uploaded_file is not None:
     # Display file info
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    st.success(f"Uploaded {file_extension.upper()} file: {uploaded_file.name}")
+    if option == "Upload a document":
+        file_extension = uploaded_file.name.split('.')[-1].lower()
+        st.success(f"Uploaded {file_extension.upper()} file: {uploaded_file.name}")
+    else:
+        st.success("Sample document loaded: GT-FY23-FinS.pdf")
+        file_extension = "pdf"
 
     if st.button('Process Document'):
         with st.spinner('Processing document...'):
             try:
                 with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                    tmp_file.write(uploaded_file.getvalue())
+                    if option == "Upload a document":
+                        tmp_file.write(uploaded_file.getvalue())
+                    else:
+                        tmp_file.write(uploaded_file)
                     tmp_file_path = tmp_file.name
                 
                 text = ""
@@ -132,9 +232,16 @@ if uploaded_file is not None:
                 elif file_extension == 'docx':
                     text = extract_text_from_docx(tmp_file_path)
                 elif file_extension == 'txt':
-                    text = uploaded_file.read().decode("utf-8")
+                    if option == "Upload a document":
+                        text = uploaded_file.read().decode("utf-8")
+                    else:
+                        with open(tmp_file_path, "r", encoding="utf-8") as f:
+                            text = f.read()
                 elif file_extension == 'csv':
-                    text, tables = extract_text_from_csv(uploaded_file)
+                    if option == "Upload a document":
+                        text, tables = extract_text_from_csv(uploaded_file)
+                    else:
+                        text, tables = extract_text_from_csv(tmp_file_path)
                     if text:
                         text = clean_text(text)
                         st.session_state.extracted_text = text
@@ -142,7 +249,10 @@ if uploaded_file is not None:
                     if tables:
                         st.session_state.tables = tables
                 elif file_extension == 'xlsx':
-                    text, tables = extract_text_from_xlsx(uploaded_file)
+                    if option == "Upload a document":
+                        text, tables = extract_text_from_xlsx(uploaded_file)
+                    else:
+                        text, tables = extract_text_from_xlsx(tmp_file_path)
                     if text:
                         text = clean_text(text)
                         st.session_state.extracted_text = text
@@ -249,7 +359,7 @@ if st.session_state.get('extracted_text') and client:
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3
+                    temperature=0.5
                 )
                 
                 st.session_state.analysis_results = response.choices[0].message.content

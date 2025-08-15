@@ -4,7 +4,6 @@ from openai import OpenAI
 import pytesseract
 import re
 import os
-import tempfile
 
 #print(pytesseract.get_tesseract_version())
 # Should print version like '5.3.3'
@@ -56,37 +55,60 @@ def extract_text(image):
         st.error(f"OCR Error: {str(e)}")
         return None
 
-# Image upload section
-uploaded_image = st.file_uploader("Upload an image", 
-                                type=["jpg", "jpeg", "png", "bmp"])
+# Image selection section
+option = st.radio("Select image source:", ("Upload an image", "Use sample receipt"))
 
-if uploaded_image is not None:
+if option == "Upload an image":
+    uploaded_image = st.file_uploader("Choose an image file", 
+                                    type=["jpg", "jpeg", "png", "bmp"])
+    if uploaded_image is not None:
+        try:
+            st.session_state.image = Image.open(uploaded_image)
+        except Exception as e:
+            st.error(f"Failed to load image: {str(e)}")
+else:
+    # Load sample receipt
+    sample_path = "data/image/receipt.jpeg"
     try:
-        st.session_state.image = Image.open(uploaded_image)
-        st.image(st.session_state.image, 
-                caption='Uploaded Image', 
-                use_container_width=True)  # Changed from use_column_width to use_container_width
-
-        if st.button('Extract Text'):
-            with st.spinner('Processing image...'):
-                try:
-                    # Preprocess image
-                    processed_img = preprocess_image(st.session_state.image)
-                    
-                    # Perform OCR
-                    raw_text = extract_text(processed_img)
-                    
-                    if not raw_text:
-                        st.warning("No text found. Try a clearer image.")
-                        st.session_state.extracted_text = ""
-                    else:
-                        st.session_state.extracted_text = clean_ocr_text(raw_text)
-                        st.success("Text extraction complete!")
-                        
-                except Exception as e:
-                    st.error(f"Text extraction failed: {str(e)}")
+        if os.path.exists(sample_path):
+            st.session_state.image = Image.open(sample_path)
+            st.info("Sample receipt loaded. Click 'Extract Text' to process it.")
+        else:
+            st.error(f"Sample image not found at: {sample_path}")
     except Exception as e:
-        st.error(f"Failed to load image: {str(e)}")
+        st.error(f"Failed to load sample image: {str(e)}")
+
+# Display the selected image in half width
+if st.session_state.image is not None:
+    col1, col2 = st.columns([1, 1])  # Create two equal-width columns
+    
+    with col1:
+        st.image(st.session_state.image, 
+                caption='Selected Image', 
+                use_container_width=True)  # This will now take half the container width
+    
+    with col2:
+        # Empty space or you can add other elements here
+        pass
+
+    if st.button('Extract Text'):
+        with st.spinner('Processing image...'):
+            try:
+                # Preprocess image
+                processed_img = preprocess_image(st.session_state.image)
+                
+                # Perform OCR
+                raw_text = extract_text(processed_img)
+                
+                if not raw_text:
+                    st.warning("No text found. Try a clearer image.")
+                    st.session_state.extracted_text = ""
+                else:
+                    st.session_state.extracted_text = clean_ocr_text(raw_text)
+                    st.success("Text extraction complete!")
+                    
+            except Exception as e:
+                st.error(f"Text extraction failed: {str(e)}")
 
 # Display extracted text
 if st.session_state.get('extracted_text'):
@@ -163,3 +185,7 @@ if st.button("Clear All"):
     st.session_state.clear()
     st.success("All content cleared!")
     st.rerun()
+
+# Debug view
+#with st.expander("Debug: Session State"):
+#    st.write(st.session_state)
