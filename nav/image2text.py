@@ -68,7 +68,7 @@ if option == "Upload an image":
             st.error(f"Failed to load image: {str(e)}")
 else:
     # Load sample receipt
-    sample_path = "data/image/receipt.jpeg"
+    sample_path = "data/Image/Receipt.jpeg"
     try:
         if os.path.exists(sample_path):
             st.session_state.image = Image.open(sample_path)
