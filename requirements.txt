@@ -13,3 +13,6 @@ python-docx
 pandas
 matplotlib
 openpyxl
+mysql-connector-python
+mysql
+datetime
