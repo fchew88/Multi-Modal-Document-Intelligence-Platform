@@ -1,45 +1,177 @@
 import streamlit as st
 from datetime import datetime
 import pandas as pd
-import os
-import numpy as np
+import mysql.connector
+from mysql.connector import Error
 
-# Feedback storage setup
-FEEDBACK_FILE = r"data\feedback\feedback_data.csv"
+# Database configuration (using secrets.toml)
+def get_db_config():
+    return {
+        'host': st.secrets["cloudsql"]["host"],
+        'database': st.secrets["cloudsql"]["database"],
+        'user': st.secrets["cloudsql"]["user"],
+        'password': st.secrets["cloudsql"]["password"],
+        'port': st.secrets["cloudsql"]["port"]
+    }
 
-def load_feedback():
-    """Load feedback data from CSV"""
-    if os.path.exists(FEEDBACK_FILE):
-        df = pd.read_csv(FEEDBACK_FILE)
-        # Convert NaN values to empty string in admin_response column
-        df['admin_response'] = df['admin_response'].fillna('')
-        return df
-    return pd.DataFrame(columns=["timestamp", "user_id", "username", "user_email", 
-                               "category", "comment", "status", "admin_response"])
+def create_connection():
+    """Create a database connection to the MySQL instance"""
+    try:
+        config = get_db_config()
+        connection = mysql.connector.connect(
+            host=config['host'],
+            database=config['database'],
+            user=config['user'],
+            password=config['password'],
+            port=config['port']
+        )
+        return connection
+    except Error as e:
+        st.error(f"Error connecting to MySQL database: {e}")
+        return None
 
-def save_feedback(df):
-    """Save feedback data to CSV"""
-    # Ensure data directory exists
-    os.makedirs(os.path.dirname(FEEDBACK_FILE), exist_ok=True)
-    df.to_csv(FEEDBACK_FILE, index=False)
+def create_table_if_not_exists():
+    """Create the feedback table if it doesn't exist"""
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    timestamp DATETIME NOT NULL,
+                    user_id VARCHAR(255) NOT NULL,
+                    username VARCHAR(255) NOT NULL,
+                    user_email VARCHAR(255) NOT NULL,
+                    category VARCHAR(50) NOT NULL,
+                    comment TEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'Open',
+                    admin_response TEXT,
+                    INDEX idx_user_id (user_id),
+                    INDEX idx_status (status)
+                )
+            """)
+            conn.commit()
+        except Error as e:
+            st.error(f"Error creating table: {e}")
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
+
+def load_feedback(user_id=None):
+    """Load feedback data from MySQL"""
+    try:
+        conn = create_connection()
+        if conn:
+            cursor = conn.cursor(dictionary=True)
+            query = "SELECT * FROM feedback"
+            params = []
+            
+            if user_id:
+                query += " WHERE user_id = %s"
+                params.append(user_id)
+            
+            query += " ORDER BY timestamp DESC"
+            
+            cursor.execute(query, params if params else None)
+            results = cursor.fetchall()
+            
+            # Create DataFrame with default columns if empty
+            if not results:
+                df = pd.DataFrame(columns=[
+                    "id", "timestamp", "user_id", "username", 
+                    "user_email", "category", "comment", 
+                    "status", "admin_response"
+                ])
+            else:
+                df = pd.DataFrame(results)
+            
+            # Initialize admin_response if column doesn't exist
+            if 'admin_response' not in df.columns:
+                df['admin_response'] = ''
+            else:
+                df['admin_response'] = df['admin_response'].fillna('')
+            
+            return df
+    except Error as e:
+        st.error(f"Error loading feedback: {e}")
+    return pd.DataFrame(columns=[
+        "id", "timestamp", "user_id", "username", 
+        "user_email", "category", "comment", 
+        "status", "admin_response"
+    ])
+
+def save_feedback(feedback_data):
+    """Save new feedback to MySQL"""
+    try:
+        conn = create_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO feedback (timestamp, user_id, username, user_email, category, comment, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                feedback_data['timestamp'],
+                feedback_data['user_id'],
+                feedback_data['username'],
+                feedback_data['user_email'],
+                feedback_data['category'],
+                feedback_data['comment'],
+                feedback_data['status']
+            ))
+            conn.commit()
+            return cursor.lastrowid
+    except Error as e:
+        st.error(f"Error saving feedback: {e}")
+        return None
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+def update_feedback(feedback_id, admin_response, status):
+    """Update feedback with admin response and status"""
+    try:
+        conn = create_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE feedback
+                SET admin_response = %s, status = %s
+                WHERE id = %s
+            """, (admin_response, status, feedback_id))
+            conn.commit()
+            return True
+    except Error as e:
+        st.error(f"Error updating feedback: {e}")
+        return False
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
 
 def show():
     st.title("💬 Feedback & Support")
+    
+    # Initialize database table
+    create_table_if_not_exists()
+    
+    # Initialize session state if it doesn't exist
+    if 'feedback_df' not in st.session_state:
+        st.session_state.feedback_df = load_feedback()
     
     if not st.user.get('is_logged_in', False):
         st.warning("Please login to submit feedback")
         return
     
-    # Initialize session state
-    if 'feedback_df' not in st.session_state:
-        st.session_state.feedback_df = load_feedback()
-    
     user_id = st.user["sub"]
     username = st.user.get("name", "Anonymous")
     user_email = st.user.get("email", "no-email@example.com")
     
+    # Submit new feedback
     with st.expander("➕ Submit New Feedback", expanded=True):
-        with st.form("feedback_form"):
+        with st.form("feedback_form", clear_on_submit=True):
             category = st.selectbox(
                 "Category",
                 ["General Feedback", "Bug Report", "Feature Request", "Question"],
@@ -63,20 +195,27 @@ def show():
                     "category": category,
                     "comment": comment.strip(),
                     "status": "Open",
-                    "admin_response": ""  # Initialize as empty string
+                    "admin_response": ""
                 }])
                 
-                st.session_state.feedback_df = pd.concat(
-                    [st.session_state.feedback_df, new_feedback],
-                    ignore_index=True
-                )
-                save_feedback(st.session_state.feedback_df)
+                # Save directly to database
+                save_feedback({
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'user_id': user_id,
+                    'username': username,
+                    'user_email': user_email,
+                    'category': category,
+                    'comment': comment.strip(),
+                    'status': "Open"
+                })
+                
+                # Refresh the session state from database
+                st.session_state.feedback_df = load_feedback()
                 st.success("Thank you for your feedback! We'll review it soon.")
-                st.rerun()
     
     st.divider()
     
-    # Display feedback history
+    # Display feedback history - uses the session state
     st.subheader("📝 Your Feedback History")
     
     user_feedback = st.session_state.feedback_df[
@@ -97,18 +236,17 @@ def show():
                 
                 st.markdown(f"```\n{row['comment']}\n```")
                 
-                # Check if admin_response exists and is not NaN/empty
                 if pd.notna(row.get("admin_response")) and str(row["admin_response"]).strip():
                     st.markdown("---")
                     st.markdown("**Admin Response:**")
                     st.info(row["admin_response"])
     
-    # Admin section (visible only to admins)
-    if st.user.get("email", "").endswith("fabianchew@gmail.com"):  # Admin email check
+    # Admin section
+    if st.user.get("email", "").endswith("fabianchew@gmail.com"):
         st.divider()
         st.subheader("🔧 Admin Panel")
         
-        all_feedback = st.session_state.feedback_df.sort_values("timestamp", ascending=False)
+        all_feedback = load_feedback()
         
         for _, row in all_feedback.iterrows():
             with st.expander(f"{row['username']} - {row['category']} ({row['status']})"):
@@ -125,25 +263,23 @@ def show():
                     st.markdown("**Current Response:**")
                     st.info(current_response)
                 
-                with st.form(key=f"response_form_{row.name}"):
+                with st.form(key=f"response_form_{row['id']}"):
                     new_response = st.text_area(
                         "Admin Response",
                         value=current_response,
-                        key=f"response_{row.name}"
+                        key=f"response_{row['id']}"
                     )
                     new_status = st.selectbox(
                         "Status",
                         ["Open", "In Progress", "Resolved", "Closed"],
                         index=["Open", "In Progress", "Resolved", "Closed"].index(row["status"]),
-                        key=f"status_{row.name}"
+                        key=f"status_{row['id']}"
                     )
                     
                     if st.form_submit_button("Update Response"):
-                        st.session_state.feedback_df.at[row.name, "admin_response"] = new_response
-                        st.session_state.feedback_df.at[row.name, "status"] = new_status
-                        save_feedback(st.session_state.feedback_df)
-                        st.success("Response updated successfully!")
-                        st.rerun()
+                        if update_feedback(row['id'], new_response, new_status):
+                            st.success("Response updated successfully!")
+                            st.rerun()
 
 if __name__ == "__main__":
     show()
