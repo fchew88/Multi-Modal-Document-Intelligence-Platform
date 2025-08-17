@@ -6,6 +6,7 @@ from openai import OpenAI
 import tempfile
 import os
 import re
+import json
 
 # Initialize OpenAI client
 try:
@@ -286,12 +287,6 @@ if st.session_state.get('extracted_text'):
                     value=st.session_state.extracted_text, 
                     height=300,
                     label_visibility="collapsed")
-    
-    if st.session_state.get('structured_data'):
-        st.subheader("📑 Document Structure")
-        for i, section in enumerate(st.session_state.structured_data[:5]):  # Show first 5 sections
-            with st.expander(f"Section {i+1} ({section['length']} chars)"):
-                st.write(section['content'])
     
     if st.session_state.get('tables'):
         st.subheader("📊 Extracted Tables")
